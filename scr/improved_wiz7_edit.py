@@ -78,69 +78,82 @@ def stats_reasonable(stats: dict) -> bool:
     # aksepter litt bredere range for å være tolerant mot variasjoner
     return all(1 <= v <= 255 for v in stats.values())
 
-# ---------- HP / Stamina / Level / XP deteksjon ----------
 def detect_hp(block: bytes):
     """
-    Søk etter plausibel 16bit current/max par i blokken.
-    Returnerer (offset, cur, max) eller (None, None, None).
-    Vi ser etter cur<=max, begge <= 65535, og cur>0.
-    Prioriter par der max <= 9999 og cur <= max.
+    Streng, lokal søk for HP current/max.
+    - Søk kun i vinduet STATS_OFFSET-0x20 .. STATS_OFFSET+0x60
+    - Aksepter kun 0 < cur <= max <= 2000
+    - Velg kandidat nærmest STATS_OFFSET
     """
     best = (None, None, None)
-    for i in range(0, len(block) - 3):
-        try:
-            cur = read_u16(block, i)
-            mx = read_u16(block, i + 2)
-        except Exception:
-            continue
-        if 0 < cur <= mx and mx <= 9999:
-            # heuristikk: foretrekk lavere offset nær STATS_OFFSET
+    start = max(0, STATS_OFFSET - 0x20)
+    end = min(len(block) - 3, STATS_OFFSET + 0x60)
+    for i in range(start, end):
+        cur = read_u16(block, i)
+        mx = read_u16(block, i + 2)
+        if 0 < cur <= mx and mx <= 2000:
             if best[0] is None:
                 best = (i, cur, mx)
             else:
-                # velg den som ligger nærmere STATS_OFFSET
                 if abs(i - STATS_OFFSET) < abs(best[0] - STATS_OFFSET):
                     best = (i, cur, mx)
     return best
 
 def detect_stamina(block: bytes, hp_offset):
-    # ofte rett etter HP (hp_offset + 4), men vi søker et par i nærheten
+    """
+    Søk etter stamina i et lite vindu rett etter HP.
+    - Samme grenser som HP
+    """
     if hp_offset is None:
         return (None, None, None)
-    start = max(0, hp_offset + 2)
-    end = min(len(block) - 3, hp_offset + 0x40)
+    start = hp_offset + 4
+    end = min(len(block) - 3, hp_offset + 0x20)
     for i in range(start, end):
         cur = read_u16(block, i)
         mx = read_u16(block, i + 2)
-        if 0 <= cur <= mx and mx <= 9999:
+        if 0 <= cur <= mx and mx <= 2000:
             return (i, cur, mx)
     return (None, None, None)
 
 def detect_level(block: bytes, hp_offset):
-    # level er ofte et 16bit ved et fast offset fra HP; prøv hp_offset + 0x10 og søk i nærheten
-    candidates = []
+    """
+    Søk etter level i et lite område etter HP (ofte hp_offset + 0x10).
+    - Level 1..99
+    """
     if hp_offset is None:
         return (None, None)
-    for i in range(max(0, hp_offset + 8), min(len(block) - 1, hp_offset + 0x30)):
+    target = hp_offset + 0x10
+    start = max(0, target - 8)
+    end = min(len(block) - 1, target + 8)
+    candidates = []
+    for i in range(start, end):
         lvl = read_u16(block, i)
         if 1 <= lvl <= 99:
             candidates.append((i, lvl))
     if not candidates:
         return (None, None)
-    # velg kandidat nærmest hp_offset+0x10
-    target = hp_offset + 0x10
     best = min(candidates, key=lambda x: abs(x[0] - target))
     return best
 
 def detect_xp(block: bytes, hp_offset):
-    # XP er ofte 32bit rett etter level; søk i området
+    """
+    Søk etter XP i området etter level.
+    - Aksepter XP < 50_000_000, men prioriter < 10_000_000
+    - Søk i begrenset vindu
+    """
     if hp_offset is None:
         return (None, None)
-    for i in range(max(0, hp_offset + 0x10), min(len(block) - 3, hp_offset + 0x60)):
+    start = hp_offset + 0x10
+    end = min(len(block) - 3, hp_offset + 0x60)
+    best = (None, None)
+    for i in range(start, end):
         xp = read_u32(block, i)
         if 0 <= xp < 50000000:
-            return (i, xp)
-    return (None, None)
+            if xp < 10000000:
+                return (i, xp)
+            if best[0] is None:
+                best = (i, xp)
+    return best
 
 # ---------- Finn karakterblokker ----------
 def find_character_offsets(data: bytes):
