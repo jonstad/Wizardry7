@@ -995,47 +995,41 @@ def read_s16(data, offset):
 
 def read_str(data, offset, length):
     raw = data[offset:offset+length]
-    return raw.split(b"\x00")[0].decode("ascii", errors="ignore")
-
-# ------------------------------------------------------------
-#  Character block detection
-# ------------------------------------------------------------
+    s = raw.split(b"\x00")[0].decode("cp437", errors="replace")
+    return "".join(ch for ch in s if 32 <= ord(ch) <= 126)
 
 def find_character_blocks(data):
-    """
-    Wizardry 7 DOS stores 6 character blocks of fixed size.
-    But offsets vary depending on save version.
-    Vi skanner etter kjente signaturer:
-    - Navn (ASCII)
-    - Klassefelt
-    - Stats
-    - Inventory count
-    """
     blocks = []
-    block_size = 0x180  # stabilt i DOS-versjonen
-
-    for off in range(0, len(data) - block_size, 4):
-        name = read_str(data, off, 16)
-        if len(name) == 0:
-            continue
-
-        # plausibel klasse?
-        cls = data[off + 0x20]
-        if cls > 20:
-            continue
-
-        # plausibel HP?
-        hp = read_s16(data, off + 0x30)
-        if hp < 0 or hp > 500:
-            continue
-
-        # inventory count plausibel?
-        inv_count = data[off + 0x80]
-        if inv_count <= 20:
-            blocks.append(off)
-
-    # returner maks 6 blokker
-    return blocks[:6]
+    # prøv flere mulige blokkstørrelser
+    for block_size in (0x160, 0x180, 0x1A0, 0x200):
+        for off in range(0, len(data) - block_size, 4):
+            name = read_str(data, off, 16)
+            if len(name) < 2:
+                continue
+            # prøv flere mulige posisjoner for klasse/hp/inv_count
+            for cls_off in (0x20, 0x1E, 0x22):
+                for hp_off in (0x30, 0x2E, 0x34):
+                    for inv_off in (0x80, 0x7E, 0x82):
+                        if off + max(cls_off, hp_off+1, inv_off) >= len(data):
+                            continue
+                        cls = data[off + cls_off]
+                        hp = struct.unpack_from("<h", data, off + hp_off)[0]
+                        inv_count = data[off + inv_off]
+                        if 0 <= cls <= 20 and 0 <= hp <= 1000 and 0 <= inv_count <= 30:
+                            blocks.append((off, block_size, cls_off, hp_off, inv_off, name))
+                            break
+                    if blocks and blocks[-1][0] == off:
+                        break
+                if blocks and blocks[-1][0] == off:
+                    break
+    # fjern duplikater, behold første forekomst per offset
+    seen = set()
+    out = []
+    for b in blocks:
+        if b[0] not in seen:
+            seen.add(b[0])
+            out.append(b)
+    return out[:6]
 
 # ------------------------------------------------------------
 #  Spell decoding
@@ -1216,7 +1210,9 @@ def main():
         print("Usage: python wiz7_editor.py SAVEFILE")
         return
 
-    chars = load_save(sys.argv[1])
+    FILE_PATH = "C:\GOG Games\Wizardry 7\DSAVANT\savegame.txt"
+    print(f"Loading save file: {FILE_PATH}")
+    chars = load_save(FILE_PATH)
     for ch in chars:
         print_character(ch)
 

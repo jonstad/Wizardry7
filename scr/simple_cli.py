@@ -2,7 +2,7 @@ import struct
 import re
 from pathlib import Path
 
-FILE_PATH = "SAVEGAME.txt"
+FILE_PATH = "C:\GOG Games\Wizardry 7\DSAVANT\savegame.txt"
 BLOCK_SIZE = 592
 
 NAME_OFFSET = 0x10
